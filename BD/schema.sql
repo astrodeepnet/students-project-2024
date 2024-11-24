@@ -85,3 +85,6 @@ CREATE TABLE Star (
     FOREIGN KEY (Coordinates_ID) REFERENCES Coordinates(Coordinates_ID),
     FOREIGN KEY (Photometry_ID) REFERENCES Photometry(Photometry_ID)
 );
+
+
+
