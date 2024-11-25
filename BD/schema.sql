@@ -26,13 +26,13 @@ CREATE TABLE Survey (
 
 CREATE TABLE Starflag (
     Starflag_ID INT PRIMARY KEY,
-    starflag_name VARCHAR(255),
+    starflag_name VARCHAR(255) UNIQUE,
     description TEXT
 );
 
 CREATE TABLE Telescope (
     Telescope_ID INT PRIMARY KEY,
-    telescope_name VARCHAR(255)
+    telescope_name VARCHAR(255) UNIQUE
 );
 
 CREATE TABLE Photometry (
@@ -46,7 +46,7 @@ CREATE TABLE Photometry (
 );
 
 CREATE TABLE Star (
-    APOGEE_ID VARCHAR(255) PRIMARY KEY,
+    APOGEE_ID VARCHAR(255) PRIMARY KEY UNIQUE,
     Chemical_ID INT,
     Telescope_ID INT,
     Starflag_ID INT,
