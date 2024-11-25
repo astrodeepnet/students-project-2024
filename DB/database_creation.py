@@ -169,32 +169,72 @@ def test_insert():
     Session = sessionmaker(bind=engine)
     session = Session()
 
-    # Create a starflag
-    starflag = Starflag(name='Bad', description='This is a bad star')
-    session.add(starflag)
-    session.commit()
+    try:
+        # Création des enregistrements pour chaque table
 
-    # Create a telescope
-    telescope = Telescope(name='Keck')
-    session.add(telescope)
-    session.commit()
+        # Ajouter un champ
+        field = Field(field_name='Orion Cluster')
+        session.add(field)
+        session.commit()
 
-    # Create a survey
-    survey = Survey(name='APOGEE')
-    session.add(survey)
-    session.commit()
+        # Ajouter des coordonnées liées au champ
+        coord1 = Coordinates(ra=83.822, dec=-5.391, field=field)
+        coord2 = Coordinates(ra=83.633, dec=-5.275, field=field)
+        session.add_all([coord1, coord2])
+        session.commit()
 
+        # Ajouter des erreurs J, K et H
+        j_error = J_error(id='J_ERR_1', j_err_range='0.01-0.02')
+        k_error = K_error(id='K_ERR_1', k_err_range='0.02-0.03')
+        h_error = H_error(id='H_ERR_1', h_err_range='0.03-0.04')
+        session.add_all([j_error, k_error, h_error])
+        session.commit()
 
-    # Create a star
-    star = Star(apogee_id='2M00000001+7523377', name='Star 1')
-    star.starflags.append(starflag)
-    star.telescopes.append(telescope)
-    star.surveys.append(survey)
-    session.add(star)
-    session.commit()
+        # Ajouter une étoile
+        star = Star(apogee_id='2M00000001+7523377', name='Star 1')
+        session.add(star)
+        session.commit()
 
-    session.close()
+        # Associer l'étoile à un starflag
+        starflag = Starflag(name='Good', description='This is a good star')
+        star.starflags.append(starflag)
+        session.add(starflag)
+        session.commit()
 
+        # Associer l'étoile à un télescope
+        telescope = Telescope(name='Hubble')
+        star.telescopes.append(telescope)
+        session.add(telescope)
+        session.commit()
+
+        # Associer l'étoile à un relevé
+        survey = Survey(name='SDSS')
+        star.surveys.append(survey)
+        session.add(survey)
+        session.commit()
+
+        # Ajouter une plage de métallicité
+        metalicity = Metalicity(id='M_H_1', m_h_range='-0.5 to +0.5')
+        session.add(metalicity)
+        session.commit()
+
+        temperature = Temperature(id='TEFF_1', teff_range='3500-5000')
+        session.add(temperature)
+        session.commit()
+
+        surface_gravity = Surface_Gravity(id='LOGG_1', logg_range='1.0-2.5')
+        vmicro = Vmicro(id='VMICRO_1', vmicro_range='1.0-1.5')
+        vmacro = Vmacro(id='VMACRO_1', vmacro_range='2.0-2.5')
+        vsini = Vsini(id='VSINI_1', vsini_range='5.0-10.0')
+        session.add_all([surface_gravity, vmicro, vmacro, vsini])
+        session.commit()
+
+        print("Insertion réussie !")
+    except Exception as e:
+        print(f"Une erreur s'est produite : {e}")
+        session.rollback()
+    finally:
+        session.close()
 
 if __name__ == "__main__":
     engine = create_engine(DATABASE_URL)
