@@ -161,6 +161,55 @@ class Vsini(Base):
 
 
 
+###### CHEMICAL ABUNDANCE TABLES - tables for 2nd DFM schema ######
+
+
+
+
+
+class ChemicalErrorRange(Base):
+    __tablename__ = 'chemical_error_range'
+    id = Column(String, primary_key=True)
+    error_range = Column(String)
+
+
+
+class ChemicalElement(Base):
+    __tablename__ = 'chemical_element'
+    name = Column(String, primary_key=True)
+    symbol = Column(String)
+    atomic_number = Column(Integer)
+    electronic_configuration = Column(String)
+    period = Column(Integer)
+    family = Column(String)
+
+class ChemicalAbundance(Base):
+    __tablename__ = 'chemical_abundance'
+    id = Column(Integer, primary_key=True)
+    apogee_id = Column(String, ForeignKey('stars.apogee_id'), nullable=False)
+    element_name = Column(String, ForeignKey('chemical_element.name'), nullable=False)
+    value = Column(Float)
+    error = Column(Float)
+
+    flags = relationship('ChemicalFlag',
+                         secondary='chemical_flag_association',
+                         back_populates='chemical_abundances')
+
+class ChemicalFlag(Base):
+    __tablename__ = 'chemical_flag'
+    flag_id = Column(Integer, primary_key=True)
+    name = Column(String)
+    description = Column(Text)
+
+    chemical_abundances = relationship('ChemicalAbundance',
+                                       secondary='chemical_flag_association',
+                                       back_populates='flags')
+
+class ChemicalFlagAssociation(Base):
+    __tablename__ = 'chemical_flag_association'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chemical_id = Column(Integer, ForeignKey('chemical_abundance.id'), nullable=False)
+    flag_id = Column(Integer, ForeignKey('chemical_flag.flag_id'), nullable=False)
 
 
 
@@ -227,6 +276,32 @@ def test_insert():
         vmacro = Vmacro(id='VMACRO_1', vmacro_range='2.0-2.5')
         vsini = Vsini(id='VSINI_1', vsini_range='5.0-10.0')
         session.add_all([surface_gravity, vmicro, vmacro, vsini])
+        session.commit()
+
+        # Ajouter un élément chimique
+        element = ChemicalElement(name='Hydrogen', symbol='H', atomic_number=1, electronic_configuration='1s1',
+                                  period=1, family='Non-metal')
+        session.add(element)
+        session.commit()
+
+        # Ajouter une abondance chimique
+        chemical_abundance = ChemicalAbundance(apogee_id='2M00000001+7523377', element_name='Hydrogen', value=12.0,
+                                               error=0.1)
+        session.add(chemical_abundance)
+        session.commit()
+
+        # Ajouter un drapeau chimique
+        chemical_flag = ChemicalFlag(name='Reliable', description='This measurement is reliable')
+        session.add(chemical_flag)
+        session.commit()
+
+        # Associer l'abondance chimique à un drapeau chimique
+        chemical_abundance.flags.append(chemical_flag)
+        session.commit()
+
+        # Ajouter une plage d'erreur chimique
+        chemical_error_range = ChemicalErrorRange(id='0.1', error_range='0.05-0.15')
+        session.add(chemical_error_range)
         session.commit()
 
         print("Insertion réussie !")
