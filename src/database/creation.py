@@ -242,10 +242,10 @@ class ChemicalFlagAssociation(Base):
 
 
 
-def test_insert():
-    engine = create_engine(DATABASE_URL)
-    Session = sessionmaker(bind=engine)
-    session = Session()
+def test_insert(session):
+    ses = session
+
+    session = ses
 
     try:
         # Création des enregistrements pour chaque table
@@ -341,12 +341,17 @@ def test_insert():
         session.close()
 
 if __name__ == "__main__":
-    engine = create_engine(DATABASE_URL)
 
-    # drop cascate all tables
+    from connection import create_session, create_engine
+    from operations import create_all_tables, drop_all_tables
+
+    session = create_session()
+    engine = create_engine()
+
+    # drop all tables
     Base.metadata.drop_all(engine)
 
-    # create all tables in the database
+    # create all tables
     Base.metadata.create_all(engine)
 
-    test_insert()
+    test_insert(session)
