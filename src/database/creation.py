@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey, Text, Table
 from sqlalchemy.orm import relationship, sessionmaker, declarative_base
-from database_connection import DATABASE_URL
+from connection import DATABASE_URL
 
 Base = declarative_base()
 
@@ -48,6 +48,38 @@ class Star(Base):
         back_populates='stars'
     )
 
+    nb_visits = Column(Integer)
+    ak_wise = Column(Float)
+    snr = Column(Float)
+
+    m_h_id = Column(String, ForeignKey('metalicity.id'))
+    m_h = Column(Float)
+
+    m_h_err = Column(Float)
+
+    vsini_id = Column(String, ForeignKey('vsini.id'))
+    vsini = Column(Float)
+
+    vmicro_id = Column(String, ForeignKey('vmicro.id'))
+    vmicro = Column(Float)
+    vmacro_id = Column(String, ForeignKey('vmacro.id'))
+    vmacro = Column(Float)
+    teff_id = Column(String, ForeignKey('temperature.id'))
+    teff = Column(Float)
+    teff_err = Column(Float)
+    logg_id = Column(String, ForeignKey('surface_gravity.id'))
+    logg = Column(Float)
+    logg_err = Column(Float)
+
+    j = Column(Float)
+    j_err_id = Column(String, ForeignKey('j_error.id'))
+    j_err = Column(Float)
+    h = Column(Float)
+    h_err_id = Column(String, ForeignKey('h_error.id'))
+    h_err = Column(Float)
+    k = Column(Float)
+    k_err_id = Column(String, ForeignKey('k_error.id'))
+    k_err = Column(Float)
 
 class Survey(Base):
     __tablename__ = 'surveys'
@@ -163,10 +195,6 @@ class Vsini(Base):
 
 ###### CHEMICAL ABUNDANCE TABLES - tables for 2nd DFM schema ######
 
-
-
-
-
 class ChemicalErrorRange(Base):
     __tablename__ = 'chemical_error_range'
     id = Column(String, primary_key=True)
@@ -189,6 +217,7 @@ class ChemicalAbundance(Base):
     apogee_id = Column(String, ForeignKey('stars.apogee_id'), nullable=False)
     element_name = Column(String, ForeignKey('chemical_element.name'), nullable=False)
     value = Column(Float)
+    error_id = Column(String, ForeignKey('chemical_error_range.id'))
     error = Column(Float)
 
     flags = relationship('ChemicalFlag',
