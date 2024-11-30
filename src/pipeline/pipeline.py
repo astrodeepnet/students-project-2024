@@ -1,10 +1,12 @@
+import time
 import numpy as np
 import pandas as pd
-from astropy.io import fits
-from tqdm import tqdm
-from const import table_column_mapping
-from src.database.creation import DatabaseTables
 from math import ceil
+
+from tqdm import tqdm
+
+from const import table_column_mapping, to_remove_from_main_dataset, to_remove_from_chemicals
+from src.database.creation import DatabaseTables
 
 
 class DataPipeline:
@@ -26,7 +28,8 @@ class DataPipeline:
         self.star_objects = []
         self.range_objects = []
 
-    def replace_na(self, value):
+    @staticmethod
+    def replace_na(value):
         """
         Replace pd.NA and np.nan with None, and convert numpy data types to Python native types.
         """
@@ -52,48 +55,19 @@ class DataPipeline:
         df = df.drop_duplicates(subset='APOGEE_ID')
         print(df.shape)
 
-        # subset all chemical abundances (collumn name contain "_FE")
         chemical_subset = df.filter(regex='_FE', axis=1)
-
-        # merge with + df.filter(regex='_H', axis=1)
         chemical_subset = pd.concat([chemical_subset, df.filter(regex='_H', axis=1)], axis=1)
-
-        to_remove_from_chemicals = ['RV_FEH', 'MIN_H', 'MAX_H', 'GAIAEDR3_R_HI_GEO', 'GAIAEDR3_R_HI_PHOTOGEO',
-                                    'CU_FE_ERR',
-                                    'P_FE_ERR', 'P_FE_FLAG',
-                                    'CU_FE_FLAG',
-                                    'M_H', 'M_H_ERR', 'X_H_SPEC', 'X_H', 'X_H_ERR']
-        chemical_subset = chemical_subset.drop(to_remove_from_chemicals, axis=1)
+        chemical_subset = chemical_subset.drop(to_remove_from_chemicals, axis=1) # drop a specific list of columns
 
         # create a df without the chemical abundances
         df = df.drop(chemical_subset.columns, axis=1)
 
-        to_remove_from_main_dataset = ['P_FE_ERR',
-                                       'P_FE_FLAG',
-                                       'CU_FE_ERR', 'GAIAEDR3_PARALLAX_ERROR', 'GAIAEDR3_PMRA', 'GAIAEDR3_PMRA_ERROR',
-                                       'GAIAEDR3_PMDEC', 'GAIAEDR3_PMDEC_ERROR', 'GAIAEDR3_PHOT_G_MEAN_MAG',
-                                       'GAIAEDR3_PHOT_BP_MEAN_MAG', 'GAIAEDR3_PHOT_RP_MEAN_MAG',
-                                       'GAIAEDR3_DR2_RADIAL_VELOCITY', 'GAIAEDR3_DR2_RADIAL_VELOCITY_ERROR',
-                                       'GAIAEDR3_R_MED_GEO', 'GAIAEDR3_R_LO_GEO', 'GAIAEDR3_R_HI_GEO',
-                                       'GAIAEDR3_R_MED_PHOTOGEO', 'GAIAEDR3_R_LO_PHOTOGEO',
-                                       'GAIAEDR3_R_HI_PHOTOGEO', 'MEANFIB', 'SIGFIB', 'AK_TARG', 'AK_TARG_METHOD',
-                                       'APOGEE_TARGET1', 'APOGEE_TARGET2', 'APOGEE2_TARGET1',
-                                       'APOGEE2_TARGET2', 'APOGEE2_TARGET3', 'APOGEE2_TARGET4',
-                                       'RV_CHI2', 'RV_CCFWHM', 'RV_AUTOFWHM', 'VSCATTER', 'VERR', 'RV_FEH', 'RV_FLAG',
-                                       'MIN_H', 'MAX_H',
-                                       'MIN_JK', 'MAX_JK', 'GAIAEDR3_SOURCE_ID', 'GAIAEDR3_PARALLAX',
-                                       'ASPCAP_GRID', 'ASPCAP_CHI2', 'FRAC_BADPIX', 'FRAC_LOWSNR', 'FRAC_SIGSKY',
-                                       'ELEM_CHI2', 'ELEMFRAC', 'EXTRATARG', 'MEMBERFLAG', 'MEMBER', 'X_H_SPEC',
-                                       'X_M_SPEC',
-                                       'FRAC_BADPIX', 'FRAC_LOWSNR', 'FRAC_SIGSKY', 'ELEM_CHI2', 'ELEMFRAC',
-                                       'X_H_SPEC', 'X_M_SPEC', 'TEFF_SPEC', 'LOGG_SPEC', 'CU_FE_FLAG', 'ALT_ID',
-                                       'PROGRAMNAME',
-                                       'RV_TEFF', 'RV_LOGG', 'RV_ALPHA', 'RV_CARB', 'SNREV', 'SFD_EBV', 'N_COMPONENTS']
-
         df = df.drop(to_remove_from_main_dataset, axis=1)
 
-
         chemical_subset = chemical_subset[chemical_subset.columns.drop(list(chemical_subset.filter(regex='_SPEC')))]
+
+        # Add back APOGEE_ID to the chemical subset
+        chemical_subset['APOGEE_ID'] = df['APOGEE_ID']
 
         self.df = df
         self.chemical_subset = chemical_subset
@@ -104,7 +78,6 @@ class DataPipeline:
         """
         # Drop columns with 100% NaN values
         self.chemical_subset = self.chemical_subset.dropna(axis=1, how='all')
-
 
         # Separate error and flag columns
         self.chemical_subset_err = self.chemical_subset.filter(regex='_ERR', axis=1)
@@ -117,21 +90,20 @@ class DataPipeline:
         # Parse chemical elements
         self.chemical_elements = [x.split('_')[0] for x in self.chemical_subset.columns]
 
-    def calculate_decile_intervals_all_columns(SELF, df, decimals=3):
+    def calculate_decile_intervals_all_columns(self, df, decimals=3):
         intervals = {}
         for column in tqdm(df.select_dtypes(include=[np.number]).columns, desc="Calculating decile intervals"):
 
-            # Exclure les NaN pour le calcul
+            # Exclude columns with all NaN values
             valid_data = df[column].dropna()
             if not valid_data.empty:
                 deciles = np.percentile(valid_data, q=np.arange(0, 101, 10))
-                # Ajuster les bornes
                 deciles[0] = np.floor(
-                    deciles[0] * 10 ** decimals) / 10 ** decimals  # Arrondi au-dessous pour le premier
+                    deciles[0] * 10 ** decimals) / 10 ** decimals  # Adjust the first decile to be inclusive
                 deciles[-1] = np.ceil(
-                    deciles[-1] * 10 ** decimals) / 10 ** decimals  # Arrondi au-dessus pour le dernier
+                    deciles[-1] * 10 ** decimals) / 10 ** decimals  # Upper bound
 
-                # Créer les intervalles avec arrondi
+                # Create intervals with rounded values
                 intervals[f"{column}_RANGE"] = [
                     (round(deciles[i], decimals), round(deciles[i + 1], decimals))
                     for i in range(len(deciles) - 1)
@@ -157,7 +129,6 @@ class DataPipeline:
         # Fill NaN values if necessary
         self.df = self.df.fillna(value=np.nan)
         self.chemical_subset = self.chemical_subset.fillna(value=np.nan)
-
 
         # Ensure correct data types
         self.df = self.df.convert_dtypes()
@@ -205,17 +176,18 @@ class DataPipeline:
                     h_err=self.replace_na(getattr(row, 'H_ERR', None)),
                     k=self.replace_na(getattr(row, 'K', None)),
                     k_err=self.replace_na(getattr(row, 'K_ERR', None)),
-                    # Foreign keys (assigned from precomputed DataFrame columns)
-                    m_h_id=self.replace_na(getattr(row, 'metalicity_id', None)),
-                    teff_id=self.replace_na(getattr(row, 'temperature_id', None)),
-                    logg_id=self.replace_na(getattr(row, 'surface_gravity_id', None)),
-                    vsini_id=self.replace_na(getattr(row, 'vsini_id', None)),
-                    vmicro_id=self.replace_na(getattr(row, 'vmicro_id', None)),
-                    vmacro_id=self.replace_na(getattr(row, 'vmacro_id', None)),
-                    j_err_id=self.replace_na(getattr(row, 'j_error_id', None)),
-                    h_err_id=self.replace_na(getattr(row, 'h_error_id', None)),
-                    k_err_id=self.replace_na(getattr(row, 'k_error_id', None)),
                 )
+
+                star.m_h_id = self.get_range_id('metalicity', star.m_h)
+                star.teff_id = self.get_range_id('temperature', star.teff)
+                star.logg_id = self.get_range_id('surface_gravity', star.logg)
+                star.vsini_id = self.get_range_id('vsini', star.vsini)
+                star.vmicro_id = self.get_range_id('vmicro', star.vmicro)
+                star.vmacro_id = self.get_range_id('vmacro', star.vmacro)
+                star.j_err_id = self.get_range_id('j_error', star.j_err)
+                star.h_err_id = self.get_range_id('h_error', star.h_err)
+                star.k_err_id = self.get_range_id('k_error', star.k_err)
+
                 star_objects.append(star)
                 count += 1
 
@@ -327,63 +299,6 @@ class DataPipeline:
                 return f"{table_name.upper()}_{idx}"
         return None
 
-    def display_current_state(self):
-        """
-        Display the current state of processed datasets.
-        """
-        print("Main Dataset Columns:")
-        print(self.df.columns)
-
-        print("Chemical Subset Columns:")
-        print(self.chemical_subset.columns)
-
-        print("Chemical Error Columns:")
-        print(self.chemical_subset_err.columns)
-
-        print("Chemical Flag Columns:")
-        print(self.chemical_subset_flag.columns)
-
-        print("Parsed Chemical Elements:")
-        print(self.chemical_elements)
-
-        print("Decile Intervals:")
-        print(self.decile_intervals)
-
-        print("Decile Intervals for Chemical Subset:")
-        print(self.decile_intervals_chemical)
-
-    def insert_into_database(self):
-        """
-        Insert ORM objects into the database using the database connector.
-
-        This method uses the database connector to obtain a session and adds the ORM objects
-        to the session, committing the transaction to insert the data into the database.
-        """
-        try:
-            with self.connector.session_scope() as session:
-
-                for obj in tqdm(self.range_objects, desc="Inserting range objects"):
-                    session.merge(obj)
-
-                for star in tqdm(self.star_objects, desc="Inserting star objects"):
-                    session.merge(star)
-
-                print("Data inserted successfully!")
-        except Exception as e:
-            print(f"An error occurred during database insertion: {e}")
-
-    def concatenate_datasets(self, other_df: pd.DataFrame):
-        """
-        Concatenate another DataFrame to the main DataFrame.
-
-        Parameters:
-            other_df (pd.DataFrame): The DataFrame to concatenate with the main DataFrame.
-
-        This method merges the provided DataFrame with the main DataFrame along the appropriate axis,
-        ensuring that the data is aligned correctly for further processing.
-        """
-        self.df = pd.concat([self.df, other_df], ignore_index=True)
-
     def run(self):
         """
         Run the entire pipeline.
@@ -411,11 +326,9 @@ class DataPipeline:
 
 # Example Usage
 if __name__ == "__main__":
-
-    import time
     start = time.time()
     # Load dataset
-    df = pd.read_csv('../../data/allStarLite100000rows.csv')
+    df = pd.read_csv('../../data/allStarLite1000rows.csv')
     print(f"Dataset loaded, time taken: {time.time() - start:.2f} seconds")
 
     from src.database.operations import DatabaseConnector
