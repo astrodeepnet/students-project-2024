@@ -4,6 +4,7 @@ from astropy.io import fits
 from tqdm import tqdm
 from const import table_column_mapping
 from src.database.creation import DatabaseTables
+from math import ceil
 
 
 class DataPipeline:
@@ -25,12 +26,16 @@ class DataPipeline:
         self.star_objects = []
         self.range_objects = []
 
-    def replace_na(self,value):
+    def replace_na(self, value):
         """
-        Replace pd.NA and np.nan with None.
+        Replace pd.NA and np.nan with None, and convert numpy data types to Python native types.
         """
         if pd.isna(value):
             return None
+        elif isinstance(value, (np.integer, np.int64, np.int32)):
+            return int(value)
+        elif isinstance(value, (np.floating, np.float64, np.float32)):
+            return float(value)
         else:
             return value
 
@@ -42,6 +47,10 @@ class DataPipeline:
         self.df = self.df.drop(0)
 
         df = self.df
+
+        # drop duplicates APOGEE_ID
+        df = df.drop_duplicates(subset='APOGEE_ID')
+        print(df.shape)
 
         # subset all chemical abundances (collumn name contain "_FE")
         chemical_subset = df.filter(regex='_FE', axis=1)
@@ -158,53 +167,73 @@ class DataPipeline:
         self.df = self.df.where(self.df.notna(), None)
         self.chemical_subset = self.chemical_subset.where(self.chemical_subset.notna(), None)
 
-    def create_orm_objects(self):
+    def create_orm_objects(self, batch_size=1000):
         """
-        Create ORM objects from the processed DataFrame.
+        Create ORM objects from the processed DataFrame and insert them into the database in batches.
         """
-        # Create ORM instances for stars
+
+        total_rows = self.df.shape[0]
+        num_batches = ceil(total_rows / batch_size)
         count = 0
-        for _, row in tqdm(self.df.iterrows(), total=self.df.shape[0], desc="Creating star ORM objects"):
 
-            star = DatabaseTables.Star(
-                apogee_id=row['APOGEE_ID'],
-                name=row.get('APOGEE_ID'),  # Assuming name is the same as APOGEE_ID
-                nb_visits=self.replace_na(row.get('NVISITS')),
-                ak_wise=self.replace_na(row.get('AK_WISE')),
-                snr=self.replace_na(row.get('SNR')),
-                m_h=self.replace_na(row.get('M_H')),
-                m_h_err=self.replace_na(row.get('M_H_ERR')),
-                vsini=self.replace_na(row.get('VSINI')),
-                vmicro=self.replace_na(row.get('VMICRO')),
-                vmacro=self.replace_na(row.get('VMACRO')),
-                teff=self.replace_na(row.get('TEFF')),
-                teff_err=self.replace_na(row.get('TEFF_ERR')),
-                logg=self.replace_na(row.get('LOGG')),
-                logg_err=self.replace_na(row.get('LOGG_ERR')),
-                j=self.replace_na(row.get('J')),
-                j_err=self.replace_na(row.get('J_ERR')),
-                h=self.replace_na(row.get('H')),
-                h_err=self.replace_na(row.get('H_ERR')),
-                k=self.replace_na(row.get('K')),
-                k_err=self.replace_na(row.get('K_ERR')),
-            )
-            # Handle foreign key relationships for ranges
-            star.m_h_id = self.get_range_id('metalicity', star.m_h)
-            star.teff_id = self.get_range_id('temperature', star.teff)
-            star.logg_id = self.get_range_id('surface_gravity', star.logg)
-            star.vsini_id = self.get_range_id('vsini', star.vsini)
-            star.vmicro_id = self.get_range_id('vmicro', star.vmicro)
-            star.vmacro_id = self.get_range_id('vmacro', star.vmacro)
-            star.j_err_id = self.get_range_id('j_error', star.j_err)
-            star.h_err_id = self.get_range_id('h_error', star.h_err)
-            star.k_err_id = self.get_range_id('k_error', star.k_err)
-            self.star_objects.append(star)
+        for batch_num in tqdm(range(num_batches), desc="Processing batches"):
+            start_idx = batch_num * batch_size
+            end_idx = min((batch_num + 1) * batch_size, total_rows)
+            batch_df = self.df.iloc[start_idx:end_idx]
 
-            count += 1
+            star_objects = []
+
+            for row in batch_df.itertuples(index=False, name='Row'):
+                star = DatabaseTables.Star(
+                    apogee_id=row.APOGEE_ID,
+                    name=row.APOGEE_ID,  # Assuming name is the same as APOGEE_ID
+                    nb_visits=self.replace_na(getattr(row, 'NVISITS', None)),
+                    ak_wise=self.replace_na(getattr(row, 'AK_WISE', None)),
+                    snr=self.replace_na(getattr(row, 'SNR', None)),
+                    m_h=self.replace_na(getattr(row, 'M_H', None)),
+                    m_h_err=self.replace_na(getattr(row, 'M_H_ERR', None)),
+                    vsini=self.replace_na(getattr(row, 'VSINI', None)),
+                    vmicro=self.replace_na(getattr(row, 'VMICRO', None)),
+                    vmacro=self.replace_na(getattr(row, 'VMACRO', None)),
+                    teff=self.replace_na(getattr(row, 'TEFF', None)),
+                    teff_err=self.replace_na(getattr(row, 'TEFF_ERR', None)),
+                    logg=self.replace_na(getattr(row, 'LOGG', None)),
+                    logg_err=self.replace_na(getattr(row, 'LOGG_ERR', None)),
+                    j=self.replace_na(getattr(row, 'J', None)),
+                    j_err=self.replace_na(getattr(row, 'J_ERR', None)),
+                    h=self.replace_na(getattr(row, 'H', None)),
+                    h_err=self.replace_na(getattr(row, 'H_ERR', None)),
+                    k=self.replace_na(getattr(row, 'K', None)),
+                    k_err=self.replace_na(getattr(row, 'K_ERR', None)),
+                    # Foreign keys (assigned from precomputed DataFrame columns)
+                    m_h_id=self.replace_na(getattr(row, 'metalicity_id', None)),
+                    teff_id=self.replace_na(getattr(row, 'temperature_id', None)),
+                    logg_id=self.replace_na(getattr(row, 'surface_gravity_id', None)),
+                    vsini_id=self.replace_na(getattr(row, 'vsini_id', None)),
+                    vmicro_id=self.replace_na(getattr(row, 'vmicro_id', None)),
+                    vmacro_id=self.replace_na(getattr(row, 'vmacro_id', None)),
+                    j_err_id=self.replace_na(getattr(row, 'j_error_id', None)),
+                    h_err_id=self.replace_na(getattr(row, 'h_error_id', None)),
+                    k_err_id=self.replace_na(getattr(row, 'k_error_id', None)),
+                )
+                star_objects.append(star)
+                count += 1
+
+            # Insert batch into database
+            self.insert_batch_into_database(star_objects)
 
         print("Number of stars:", count)
-        # Create ORM instances for ranges
-        self.create_range_objects()
+
+    def insert_batch_into_database(self, star_objects):
+        """
+        Insert a batch of ORM objects into the database.
+        """
+        try:
+            with self.connector.session_scope() as session:
+                session.add_all(star_objects)
+                session.commit()
+        except Exception as e:
+            print(f"An error occurred during database insertion: {e}")
 
     def create_range_objects(self):
         """
@@ -231,6 +260,20 @@ class DataPipeline:
                     range_instance = model_class(id=range_id)
                     setattr(range_instance, range_attr, f"{lower} to {upper}")
                     self.range_objects.append(range_instance)
+
+        self.insert_range_objects()
+
+    def insert_range_objects(self):
+        """
+        Insert range ORM objects into the database.
+        """
+        try:
+            with self.connector.session_scope() as session:
+                for obj in tqdm(self.range_objects, desc="Inserting range objects"):
+                    session.merge(obj)
+                print("Range objects inserted successfully!")
+        except Exception as e:
+            print(f"An error occurred during database insertion: {e}")
 
     def calculate_decile_intervals(self, series, decimals=3):
         """
@@ -355,11 +398,14 @@ class DataPipeline:
         print("Filtering and cleaning done")
         self.generate_ranges()
         print("Ranges generated")
+        self.create_range_objects()
+        print("Range objects created")
         self.prepare_for_insertion()
         print("Preparation done")
         self.create_orm_objects()
         print("ORM objects created")
-        self.insert_into_database()
+
+        #self.insert_into_database()
         print("Insertion done")
 
 
@@ -369,7 +415,7 @@ if __name__ == "__main__":
     import time
     start = time.time()
     # Load dataset
-    df = pd.read_csv('../../data/allStarLiteFULL.csv')
+    df = pd.read_csv('../../data/allStarLite100000rows.csv')
     print(f"Dataset loaded, time taken: {time.time() - start:.2f} seconds")
 
     from src.database.operations import DatabaseConnector
