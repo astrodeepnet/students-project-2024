@@ -25,6 +25,11 @@ class DataPipeline:
         self.decile_intervals = None
         self.decile_intervals_chemical = None
 
+        self.surveys = None
+        self.telescopes = None
+        self.survey_name_to_obj = {}
+        self.telescope_name_to_obj = {}
+
         self.star_objects = []
         self.range_objects = []
 
@@ -54,6 +59,38 @@ class DataPipeline:
         # drop duplicates APOGEE_ID
         df = df.drop_duplicates(subset='APOGEE_ID')
         print(df.shape)
+
+        df = df.copy()
+
+        if 'SURVEY' in df.columns:
+            # Split the 'SURVEY' column into lists
+            df['SURVEY_LIST'] = df['SURVEY'].apply(lambda x: str(x).split(',') if pd.notnull(x) else [])
+            # Get all unique surveys
+            all_surveys = set()
+            df['SURVEY_LIST'].apply(lambda x: all_surveys.update(x))
+            self.surveys = pd.DataFrame({
+                'name': list(all_surveys)
+            }).dropna().reset_index(drop=True)
+
+        if 'SURVEY' in df.columns:
+            # Split the 'SURVEY' column into lists
+            df.loc[:, 'SURVEY_LIST'] = df['SURVEY'].apply(lambda x: str(x).split(',') if pd.notnull(x) else [])
+            # Get all unique surveys
+            all_surveys = set()
+            df['SURVEY_LIST'].apply(lambda x: all_surveys.update(x))
+            self.surveys = pd.DataFrame({
+                'name': list(all_surveys)
+            }).dropna().reset_index(drop=True)
+
+        if 'TELESCOPE' in df.columns:
+            # Split the 'TELESCOPE' column into lists
+            df['TELESCOPE_LIST'] = df['TELESCOPE'].apply(lambda x: str(x).split(',') if pd.notnull(x) else [])
+            # Get all unique telescopes
+            all_telescopes = set()
+            df['TELESCOPE_LIST'].apply(lambda x: all_telescopes.update(x))
+            self.telescopes = pd.DataFrame({
+                'name': list(all_telescopes)
+            }).dropna().reset_index(drop=True)
 
         chemical_subset = df.filter(regex='_FE', axis=1)
         chemical_subset = pd.concat([chemical_subset, df.filter(regex='_H', axis=1)], axis=1)
@@ -138,6 +175,43 @@ class DataPipeline:
         self.df = self.df.where(self.df.notna(), None)
         self.chemical_subset = self.chemical_subset.where(self.chemical_subset.notna(), None)
 
+    def create_survey_objects(self):
+        """
+        Create ORM objects for surveys and insert them into the database.
+        """
+        if self.surveys is not None:
+            survey_objects = []
+            for idx, row in self.surveys.iterrows():
+                survey = DatabaseTables.Survey(name=row['name'])
+                survey_objects.append(survey)
+            try:
+                with self.connector.session_scope() as session:
+                    session.bulk_save_objects(survey_objects)
+                    session.commit()
+                    # Build mapping from survey name to ORM object
+                    surveys_in_db = session.query(DatabaseTables.Survey).all()
+                    self.survey_name_to_obj = {survey.name: survey for survey in surveys_in_db}
+            except Exception as e:
+                print(f"An error occurred during survey insertion: {e}")
+
+    def create_telescope_objects(self):
+        """
+        Create ORM objects for telescopes and insert them into the database.
+        """
+        if self.telescopes is not None:
+            telescope_objects = []
+            for idx, row in self.telescopes.iterrows():
+                telescope = DatabaseTables.Telescope(name=row['name'])
+                telescope_objects.append(telescope)
+            try:
+                with self.connector.session_scope() as session:
+                    session.bulk_save_objects(telescope_objects)
+                    session.commit()
+                    # Build mapping from telescope name to ORM object
+                    telescopes_in_db = session.query(DatabaseTables.Telescope).all()
+                    self.telescope_name_to_obj = {telescope.name: telescope for telescope in telescopes_in_db}
+            except Exception as e:
+                print(f"An error occurred during telescope insertion: {e}")
     def create_orm_objects(self, batch_size=1000):
         """
         Create ORM objects from the processed DataFrame and insert them into the database in batches.
@@ -187,6 +261,25 @@ class DataPipeline:
                 star.j_err_id = self.get_range_id('j_error', star.j_err)
                 star.h_err_id = self.get_range_id('h_error', star.h_err)
                 star.k_err_id = self.get_range_id('k_error', star.k_err)
+
+                # display telescope and survey list for debugging
+                print(row.APOGEE_ID)
+                print(row.TELESCOPE_LIST)
+                print(row.SURVEY_LIST)
+
+                # Associate surveys
+                survey_list = getattr(row, 'SURVEY_LIST', [])
+                for survey_name in survey_list:
+                    survey_obj = self.survey_name_to_obj.get(survey_name.strip())
+                    if survey_obj:
+                        star.surveys.append(survey_obj)
+
+                # Associate telescopes
+                telescope_list = getattr(row, 'TELESCOPE_LIST', [])
+                for telescope_name in telescope_list:
+                    telescope_obj = self.telescope_name_to_obj.get(telescope_name.strip())
+                    if telescope_obj:
+                        star.telescopes.append(telescope_obj)
 
                 star_objects.append(star)
                 count += 1
@@ -244,6 +337,23 @@ class DataPipeline:
                 for obj in tqdm(self.range_objects, desc="Inserting range objects"):
                     session.merge(obj)
                 print("Range objects inserted successfully!")
+        except Exception as e:
+            print(f"An error occurred during database insertion: {e}")
+
+    def inser_telecope_survey(self):
+        """
+        Insert telescope and survey objects into the database.
+        """
+        self.create_survey_objects()
+        self.create_telescope_objects()
+
+        try:
+            with self.connector.session_scope() as session:
+                for survey in self.survey_name_to_obj.values():
+                    session.merge(survey)
+                for telescope in self.telescope_name_to_obj.values():
+                    session.merge(telescope)
+                print("Survey and telescope objects inserted successfully!")
         except Exception as e:
             print(f"An error occurred during database insertion: {e}")
 
@@ -317,6 +427,7 @@ class DataPipeline:
         print("Range objects created")
         self.prepare_for_insertion()
         print("Preparation done")
+        self.inser_telecope_survey()
         self.create_orm_objects()
         print("ORM objects created")
 
