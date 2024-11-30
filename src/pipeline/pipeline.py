@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+from astropy.io import fits
+from tqdm import tqdm
 from const import table_column_mapping
 from src.database.creation import DatabaseTables
 
@@ -108,7 +110,8 @@ class DataPipeline:
 
     def calculate_decile_intervals_all_columns(SELF, df, decimals=3):
         intervals = {}
-        for column in df.select_dtypes(include=[np.number]).columns:
+        for column in tqdm(df.select_dtypes(include=[np.number]).columns, desc="Calculating decile intervals"):
+
             # Exclure les NaN pour le calcul
             valid_data = df[column].dropna()
             if not valid_data.empty:
@@ -146,8 +149,6 @@ class DataPipeline:
         self.df = self.df.fillna(value=np.nan)
         self.chemical_subset = self.chemical_subset.fillna(value=np.nan)
 
-        self.df = self.df.map(lambda x: None if pd.isna(x) else x)
-        self.chemical_subset = self.chemical_subset.map(lambda x: None if pd.isna(x) else x)
 
         # Ensure correct data types
         self.df = self.df.convert_dtypes()
@@ -162,7 +163,9 @@ class DataPipeline:
         Create ORM objects from the processed DataFrame.
         """
         # Create ORM instances for stars
-        for _, row in self.df.iterrows():
+        count = 0
+        for _, row in tqdm(self.df.iterrows(), total=self.df.shape[0], desc="Creating star ORM objects"):
+
             star = DatabaseTables.Star(
                 apogee_id=row['APOGEE_ID'],
                 name=row.get('APOGEE_ID'),  # Assuming name is the same as APOGEE_ID
@@ -195,12 +198,11 @@ class DataPipeline:
             star.j_err_id = self.get_range_id('j_error', star.j_err)
             star.h_err_id = self.get_range_id('h_error', star.h_err)
             star.k_err_id = self.get_range_id('k_error', star.k_err)
-
-            print(star.m_h_id)
-            print(star.m_h)
-
             self.star_objects.append(star)
 
+            count += 1
+
+        print("Number of stars:", count)
         # Create ORM instances for ranges
         self.create_range_objects()
 
@@ -316,13 +318,12 @@ class DataPipeline:
         """
         try:
             with self.connector.session_scope() as session:
-                # Add range objects first to ensure foreign key constraints are met
-                for obj in self.range_objects:
-                    session.merge(obj)  # Use merge to avoid duplicates
 
-                # Add star objects
-                for star in self.star_objects:
-                    session.merge(star)  # Use merge to avoid duplicates
+                for obj in tqdm(self.range_objects, desc="Inserting range objects"):
+                    session.merge(obj)
+
+                for star in tqdm(self.star_objects, desc="Inserting star objects"):
+                    session.merge(star)
 
                 print("Data inserted successfully!")
         except Exception as e:
@@ -349,18 +350,27 @@ class DataPipeline:
         the data into the database.
         """
         self.preprocess()
+        print("Preprocessing done")
         self.filter_and_clean()
+        print("Filtering and cleaning done")
         self.generate_ranges()
+        print("Ranges generated")
         self.prepare_for_insertion()
+        print("Preparation done")
         self.create_orm_objects()
+        print("ORM objects created")
         self.insert_into_database()
-
+        print("Insertion done")
 
 
 # Example Usage
 if __name__ == "__main__":
+
+    import time
+    start = time.time()
     # Load dataset
-    df = pd.read_csv('../../data/allStarLite_10rows.csv')
+    df = pd.read_csv('../../data/allStarLiteFULL.csv')
+    print(f"Dataset loaded, time taken: {time.time() - start:.2f} seconds")
 
     from src.database.operations import DatabaseConnector
     from src.database.connection import DATABASE_URL
@@ -381,5 +391,5 @@ if __name__ == "__main__":
     # Run pipeline
     pipeline.run()
 
-    # Display current state
-    #pipeline.display_current_state()
+    end = time.time()
+    print(f"Time taken: {end - start:.2f} seconds")
