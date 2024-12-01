@@ -5,7 +5,7 @@ from math import ceil
 
 from tqdm import tqdm
 
-from const import table_column_mapping, to_remove_from_main_dataset, to_remove_from_chemicals
+from const import table_column_mapping, to_remove_from_main_dataset, to_remove_from_chemicals, CHEMICAL_ELEMENTS_DATA
 from src.database.creation import DatabaseTables
 
 
@@ -323,9 +323,6 @@ class DataPipeline:
                         if starflag_obj:
                             star.starflags.append(starflag_obj)
 
-                print(star.starflags)
-                print(star.apogee_id)
-
                 star_objects.append(star)
                 count += 1
 
@@ -402,6 +399,29 @@ class DataPipeline:
         except Exception as e:
             print(f"An error occurred during database insertion: {e}")
 
+    def insert_chemical_elements(self):
+        """
+        Insert chemical elements into the database.
+        """
+        chemical_element_objects = []
+        for key, data in CHEMICAL_ELEMENTS_DATA.items():
+            element = DatabaseTables.ChemicalElement(
+                name=data['name'],
+                symbol=data['symbol'],
+                atomic_number=data['atomic_number'],
+                electronic_configuration=data['electronic_configuration'],
+                period=data['period'],
+                family=data['family'],
+            )
+            chemical_element_objects.append(element)
+        try:
+            with self.connector.session_scope() as session:
+                session.bulk_save_objects(chemical_element_objects)
+                session.commit()
+                print("Chemical elements inserted successfully!")
+        except Exception as e:
+            print(f"An error occurred during chemical element insertion: {e}")
+
     def calculate_decile_intervals(self, series, decimals=3):
         """
         Calculate decile intervals for a given pandas Series.
@@ -477,6 +497,8 @@ class DataPipeline:
         self.prepare_for_insertion()
         print("Preparation done")
         self.inser_telecope_survey()
+        self.insert_chemical_elements()
+        print("Chemical elements inserted")
         self.create_orm_objects()
         print("ORM objects created")
 
@@ -488,7 +510,7 @@ class DataPipeline:
 if __name__ == "__main__":
     start = time.time()
     # Load dataset
-    df = pd.read_csv('../../data/allStarLite1000rows.csv')
+    df = pd.read_csv('../../data/allStarLite_10rows.csv')
     print(f"Dataset loaded, time taken: {time.time() - start:.2f} seconds")
 
     from src.database.operations import DatabaseConnector
