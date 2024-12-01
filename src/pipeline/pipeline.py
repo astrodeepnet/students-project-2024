@@ -30,6 +30,9 @@ class DataPipeline:
         self.survey_name_to_obj = {}
         self.telescope_name_to_obj = {}
 
+        self.flag_columns = None
+
+
         self.star_objects = []
         self.range_objects = []
 
@@ -106,8 +109,25 @@ class DataPipeline:
         # Add back APOGEE_ID to the chemical subset
         chemical_subset['APOGEE_ID'] = df['APOGEE_ID']
 
+        #identify all columns that contains "flag" in in their name in the main dataset (could be starflags)
+        flag_columns = df.filter(regex='FLAG', axis=1).columns
+        self.flag_columns = flag_columns
+
+        self.all_flags = set()
+
+        for flag_col in flag_columns:
+            df[flag_col + '_LIST'] = df[flag_col].apply(lambda x: str(x).split(',') if pd.notnull(x) else [])
+            df[flag_col + '_LIST'].apply(lambda x: self.all_flags.update([flag.strip() for flag in x if flag.strip()]))
+
+        self.flag_list_columns = [flag_col + '_LIST' for flag_col in flag_columns]
+
+        print(len(self.all_flags))
+        print(self.flag_list_columns)
+
         self.df = df
         self.chemical_subset = chemical_subset
+
+
 
     def filter_and_clean(self):
         """
@@ -174,6 +194,24 @@ class DataPipeline:
         # Replace pd.NA with None
         self.df = self.df.where(self.df.notna(), None)
         self.chemical_subset = self.chemical_subset.where(self.chemical_subset.notna(), None)
+
+    def create_starflag_objects(self):
+        """
+        Create ORM objects for starflags and insert them into the database.
+        """
+        if self.all_flags:
+            starflag_objects = []
+            for flag_name in self.all_flags:
+                starflag = DatabaseTables.Starflag(name=flag_name)
+                starflag_objects.append(starflag)
+            try:
+                with self.connector.session_scope() as session:
+                    session.bulk_save_objects(starflag_objects)
+                    session.commit()
+                    starflags_in_db = session.query(DatabaseTables.Starflag).all()
+                    self.starflag_name_to_obj = {starflag.name: starflag for starflag in starflags_in_db}
+            except Exception as e:
+                print(f"An error occurred during starflag insertion: {e}")
 
     def create_survey_objects(self):
         """
@@ -262,11 +300,6 @@ class DataPipeline:
                 star.h_err_id = self.get_range_id('h_error', star.h_err)
                 star.k_err_id = self.get_range_id('k_error', star.k_err)
 
-                # display telescope and survey list for debugging
-                print(row.APOGEE_ID)
-                print(row.TELESCOPE_LIST)
-                print(row.SURVEY_LIST)
-
                 # Associate surveys
                 survey_list = getattr(row, 'SURVEY_LIST', [])
                 for survey_name in survey_list:
@@ -280,6 +313,18 @@ class DataPipeline:
                     telescope_obj = self.telescope_name_to_obj.get(telescope_name.strip())
                     if telescope_obj:
                         star.telescopes.append(telescope_obj)
+
+                # Associate flags
+                for flag_list_col in self.flag_list_columns:
+                    flag_list = getattr(row, flag_list_col, [])
+                    for flag_name in flag_list:
+                        flag_name = flag_name.strip()
+                        starflag_obj = self.starflag_name_to_obj.get(flag_name)
+                        if starflag_obj:
+                            star.starflags.append(starflag_obj)
+
+                print(star.starflags)
+                print(star.apogee_id)
 
                 star_objects.append(star)
                 count += 1
@@ -425,6 +470,10 @@ class DataPipeline:
         print("Ranges generated")
         self.create_range_objects()
         print("Range objects created")
+
+        self.create_starflag_objects()
+        print("Starflag objects created")
+
         self.prepare_for_insertion()
         print("Preparation done")
         self.inser_telecope_survey()
