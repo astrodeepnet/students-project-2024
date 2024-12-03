@@ -13,6 +13,7 @@ class DataPipeline:
         """
         Initialize the data pipeline with the main dataset.
         """
+
         self.df = df
         self.connector = connector
 
@@ -29,6 +30,17 @@ class DataPipeline:
         self.telescopes = None
         self.survey_name_to_obj = {}
         self.telescope_name_to_obj = {}
+        self.chemical_flag_name_to_obj = {}
+
+        self.symbol_to_name = {data['symbol'].upper(): data['name'] for data in CHEMICAL_ELEMENTS_DATA.values()}
+
+
+        self.flag_list_columns = None
+        self.all_flags = None
+        self.chemical_flag_columns = None
+        self.all_chemical_flags = None
+        self.chemical_flag_list_columns = None
+
 
         self.flag_columns = None
 
@@ -61,7 +73,6 @@ class DataPipeline:
 
         # drop duplicates APOGEE_ID
         df = df.drop_duplicates(subset='APOGEE_ID')
-        print(df.shape)
 
         df = df.copy()
 
@@ -146,6 +157,25 @@ class DataPipeline:
         self.chemical_elements = [x.split('_')[0] for x in self.chemical_subset.columns]
         self.chemical_elements = ['APOGEE_ID' if x == 'APOGEE' else x for x in self.chemical_elements]
 
+        # Process chemical flags
+        self.chemical_flag_columns = self.chemical_subset_flag.columns.tolist()
+        self.all_chemical_flags = set()
+
+        # For each chemical flag column
+        for flag_col in self.chemical_flag_columns:
+            # For each row, parse the flags
+            self.chemical_subset_flag[flag_col + '_LIST'] = self.chemical_subset_flag[flag_col].apply(
+                lambda x: str(x).split(',') if pd.notnull(x) else [])
+            # Update the set of all chemical flags
+            self.chemical_subset_flag[flag_col + '_LIST'].apply(
+                lambda x: self.all_chemical_flags.update([flag.strip() for flag in x if flag.strip()]))
+
+        # Store the list columns for later use
+        self.chemical_flag_list_columns = [col + '_LIST' for col in self.chemical_flag_columns]
+
+        print(len(self.chemical_subset.columns))
+
+
     def calculate_decile_intervals_all_columns(self, df, decimals=3):
         intervals = {}
         for column in tqdm(df.select_dtypes(include=[np.number]).columns, desc="Calculating decile intervals"):
@@ -213,6 +243,24 @@ class DataPipeline:
                     self.starflag_name_to_obj = {starflag.name: starflag for starflag in starflags_in_db}
             except Exception as e:
                 print(f"An error occurred during starflag insertion: {e}")
+
+    def create_chemical_flag_objects(self):
+        """
+        Create ORM objects for chemical flags and insert them into the database.
+        """
+        if self.all_chemical_flags:
+            chemical_flag_objects = []
+            for flag_name in self.all_chemical_flags:
+                chemical_flag = DatabaseTables.ChemicalFlag(name=flag_name)
+                chemical_flag_objects.append(chemical_flag)
+            try:
+                with self.connector.session_scope() as session:
+                    session.bulk_save_objects(chemical_flag_objects)
+                    session.commit()
+                    chemical_flags_in_db = session.query(DatabaseTables.ChemicalFlag).all()
+                    self.chemical_flag_name_to_obj = {flag.name: flag for flag in chemical_flags_in_db}
+            except Exception as e:
+                print(f"An error occurred during chemical flag insertion: {e}")
 
     def create_survey_objects(self):
         """
@@ -334,6 +382,144 @@ class DataPipeline:
 
         print("Number of stars:", count)
 
+    def create_chemical_abundance_objects(self, batch_size=1000):
+        """
+        Create ORM objects for chemical abundances and insert them into the database in batches.
+        """
+        total_rows = self.chemical_subset.shape[0]
+        num_batches = ceil(total_rows / batch_size)
+        count = 0
+
+        for batch_num in tqdm(range(num_batches), desc="Processing chemical abundance batches"):
+            start_idx = batch_num * batch_size
+            end_idx = min((batch_num + 1) * batch_size, total_rows)
+            batch_df = self.chemical_subset.iloc[start_idx:end_idx]
+            batch_df_err = self.chemical_subset_err.iloc[start_idx:end_idx]
+            batch_df_flag = self.chemical_subset_flag.iloc[start_idx:end_idx]
+
+            chemical_abundance_objects = []
+
+            for idx, row in batch_df.iterrows():
+                apogee_id = row['APOGEE_ID']
+                # For each element
+                for element in self.chemical_elements:
+                    if element == 'APOGEE_ID':
+                        continue
+                    # Determine the correct abundance column
+                    if f"{element}_FE" in batch_df.columns:
+                        column_name = f"{element}_FE"
+                        error_column = f"{element}_FE_ERR"
+                        flag_col = f"{element}_FE_FLAG_LIST"
+                    elif f"{element}_H" in batch_df.columns:
+                        column_name = f"{element}_H"
+                        error_column = f"{element}_H_ERR"
+                        flag_col = f"{element}_H_FLAG_LIST"
+                    else:
+                        continue  # Skip if neither column exists
+
+                    abundance_value = self.replace_na(row.get(column_name, None))
+                    error_value = self.replace_na(
+                        batch_df_err.at[idx, error_column]) if error_column in batch_df_err.columns else None
+
+                    # Get the value_id and error_id from the ranges
+                    value_id = self.get_chemical_range_id(element, abundance_value)
+                    error_id = self.get_chemical_error_range_id(element, error_value)
+
+                    # Map element symbol to full name
+                    element_full_name = self.symbol_to_name.get(element.upper(), element)
+
+                    # Create ChemicalAbundance object
+                    chemical_abundance = DatabaseTables.ChemicalAbundance(
+                        apogee_id=apogee_id,
+                        element_name=element_full_name,
+                        value=abundance_value,
+                        value_id=value_id,
+                        error=error_value,
+                        error_id=error_id
+                    )
+
+                    # Associate flags
+                    flag_list = batch_df_flag.at[idx, flag_col] if flag_col in batch_df_flag.columns else []
+                    for flag_name in flag_list:
+                        flag_name = flag_name.strip()
+                        chemical_flag_obj = self.chemical_flag_name_to_obj.get(flag_name)
+                        if chemical_flag_obj:
+                            chemical_abundance.flags.append(chemical_flag_obj)
+
+                    chemical_abundance_objects.append(chemical_abundance)
+                    count += 1
+
+            # Insert batch into database
+            self.insert_chemical_abundance_batch(chemical_abundance_objects)
+
+        print("Number of chemical abundances:", count)
+
+    def insert_chemical_abundance_batch(self, chemical_abundance_objects):
+        """
+        Insert a batch of ChemicalAbundance ORM objects into the database.
+        """
+        try:
+            with self.connector.session_scope() as session:
+                session.add_all(chemical_abundance_objects)
+                session.commit()
+        except Exception as e:
+            print(f"An error occurred during chemical abundance database insertion: {e}")
+
+    def get_chemical_range_id(self, element_symbol, value):
+        """
+        Get the range ID for a given chemical abundance value based on decile intervals.
+        """
+        if value is None or pd.isna(value):
+            return None
+
+        # Construct the range column name
+        range_col = f"{element_symbol}_FE_RANGE" if f"{element_symbol}_FE_RANGE" in self.decile_intervals_chemical.columns else f"{element_symbol}_H_RANGE"
+
+        if range_col not in self.decile_intervals_chemical.columns:
+            return None
+
+        intervals_series = self.decile_intervals_chemical[range_col]
+
+        # Iterate over the intervals
+        for idx, interval in intervals_series.items():
+            if pd.isna(interval):
+                continue
+            lower, upper = interval
+            if lower <= value <= upper:
+                return f"{element_symbol}_{idx}"
+        return None
+
+    def get_chemical_error_range_id(self, element_symbol, error_value):
+        """
+        Get the error range ID for a given chemical abundance error value based on decile intervals.
+        """
+        if error_value is None or pd.isna(error_value):
+            return None
+
+        # Construct the possible range column names
+        possible_range_cols = [
+            f"{element_symbol}_FE_ERR_RANGE",
+            f"{element_symbol}_H_ERR_RANGE"
+        ]
+
+        # Find the correct range column
+        range_col = next((col for col in possible_range_cols if col in self.decile_intervals_chemical_err.columns),
+                         None)
+
+        if not range_col:
+            return None
+
+        intervals_series = self.decile_intervals_chemical_err[range_col]
+
+        # Iterate over the intervals
+        for idx, interval in intervals_series.items():
+            if pd.isna(interval):
+                continue
+            lower, upper = interval
+            if lower <= error_value <= upper:
+                return f"{element_symbol}_ERR_{idx}"
+        return None
+
     def insert_batch_into_database(self, star_objects):
         """
         Insert a batch of ORM objects into the database.
@@ -382,6 +568,40 @@ class DataPipeline:
                         id=range_id,
                         element_name=element_name,
                         error_range=f"{lower} to {upper}"
+                    )
+                    self.range_objects.append(range_instance)
+
+        symbol_to_name = {data['symbol'].upper(): data['name'] for data in CHEMICAL_ELEMENTS_DATA.values()}
+
+        # Create ranges for chemical element errors
+        for column in self.chemical_subset_err.columns:
+            element_symbol = column.split('_')[0]  # Get the element symbol
+            element_name = symbol_to_name.get(element_symbol.upper(), element_symbol)
+            intervals = self.decile_intervals_chemical_err.get(f"{column}_RANGE")
+            if intervals is not None:
+                for idx, (lower, upper) in enumerate(intervals):
+                    range_id = f"{element_symbol}_ERR_{idx}"
+                    range_instance = DatabaseTables.ChemicalErrorRange(
+                        id=range_id,
+                        element_name=element_name,  # Use full name
+                        error_range=f"{lower} to {upper}"
+                    )
+                    self.range_objects.append(range_instance)
+
+        # Create ranges for chemical elements
+        for column in self.chemical_subset.columns:
+            if column == 'APOGEE_ID':
+                continue
+            element_symbol = column.split('_')[0]
+            element_name = symbol_to_name.get(element_symbol.upper(), element_symbol)
+            intervals = self.decile_intervals_chemical.get(f"{column}_RANGE")
+            if intervals is not None:
+                for idx, (lower, upper) in enumerate(intervals):
+                    range_id = f"{element_symbol}_{idx}"
+                    range_instance = DatabaseTables.ChemicalElementRange(
+                        id=range_id,
+                        element_name=element_name,  # Use full name
+                        element_range=f"{lower} to {upper}"
                     )
                     self.range_objects.append(range_instance)
 
@@ -510,6 +730,8 @@ class DataPipeline:
 
         self.create_starflag_objects()
         print("Starflag objects created")
+        self.create_chemical_flag_objects()
+        print("Chemical flag objects created")
 
         self.prepare_for_insertion()
         print("Preparation done")
@@ -519,6 +741,7 @@ class DataPipeline:
         self.create_orm_objects()
         print("ORM objects created")
 
+        self.create_chemical_abundance_objects()
         #self.insert_into_database()
         print("Insertion done")
 

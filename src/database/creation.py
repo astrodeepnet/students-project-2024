@@ -201,6 +201,12 @@ class DatabaseTables:
         element_name = Column(String)
         error_range = Column(String)
 
+    class ChemicalElementRange(Base):
+        __tablename__ = 'chemical_element_range'
+        id = Column(String, primary_key=True)
+        element_name = Column(String)
+        element_range = Column(String)
+
     class ChemicalElement(Base):
         __tablename__ = 'chemical_element'
         name = Column(String, primary_key=True)
@@ -215,6 +221,7 @@ class DatabaseTables:
         id = Column(Integer, primary_key=True)
         apogee_id = Column(String, ForeignKey('stars.apogee_id'), nullable=False)
         element_name = Column(String, ForeignKey('chemical_element.name'), nullable=False)
+        value_id = Column(String, ForeignKey('chemical_element_range.id'))
         value = Column(Float)
         error_id = Column(String, ForeignKey('chemical_error_range.id'))
         error = Column(Float)

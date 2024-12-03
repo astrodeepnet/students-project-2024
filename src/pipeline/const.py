@@ -52,7 +52,7 @@ CHEMICAL_ELEMENTS_DATA = {
     },
     'CI': {
         'name': 'Carbon I',
-        'symbol': 'C I',
+        'symbol': 'CI',
         'atomic_number': 6,
         'electronic_configuration': '1s2 2s2 2p2',
         'period': 2,
@@ -140,7 +140,7 @@ CHEMICAL_ELEMENTS_DATA = {
     },
     'TIII': {
         'name': 'Titanium III',
-        'symbol': 'Ti III',
+        'symbol': 'TIII',
         'atomic_number': 22,
         'electronic_configuration': '[Ar] 3d1 4s2',
         'period': 4,
