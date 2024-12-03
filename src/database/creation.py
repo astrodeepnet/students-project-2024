@@ -198,9 +198,8 @@ class DatabaseTables:
     class ChemicalErrorRange(Base):
         __tablename__ = 'chemical_error_range'
         id = Column(String, primary_key=True)
+        element_name = Column(String)
         error_range = Column(String)
-
-
 
     class ChemicalElement(Base):
         __tablename__ = 'chemical_element'

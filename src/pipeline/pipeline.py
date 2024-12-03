@@ -5,9 +5,8 @@ from math import ceil
 
 from tqdm import tqdm
 
-from const import table_column_mapping, to_remove_from_main_dataset, to_remove_from_chemicals, CHEMICAL_ELEMENTS_DATA
-from src.database.creation import DatabaseTables
-
+from pipeline.const import table_column_mapping, to_remove_from_main_dataset, to_remove_from_chemicals, CHEMICAL_ELEMENTS_DATA
+from database.creation import DatabaseTables
 
 class DataPipeline:
     def __init__(self, df: pd.DataFrame, connector):
@@ -24,6 +23,7 @@ class DataPipeline:
         self.chemical_elements = None
         self.decile_intervals = None
         self.decile_intervals_chemical = None
+        self.decile_intervals_chemical_err = None
 
         self.surveys = None
         self.telescopes = None
@@ -121,8 +121,6 @@ class DataPipeline:
 
         self.flag_list_columns = [flag_col + '_LIST' for flag_col in flag_columns]
 
-        print(len(self.all_flags))
-        print(self.flag_list_columns)
 
         self.df = df
         self.chemical_subset = chemical_subset
@@ -146,6 +144,7 @@ class DataPipeline:
 
         # Parse chemical elements
         self.chemical_elements = [x.split('_')[0] for x in self.chemical_subset.columns]
+        self.chemical_elements = ['APOGEE_ID' if x == 'APOGEE' else x for x in self.chemical_elements]
 
     def calculate_decile_intervals_all_columns(self, df, decimals=3):
         intervals = {}
@@ -175,6 +174,8 @@ class DataPipeline:
         """
         self.decile_intervals = self.calculate_decile_intervals_all_columns(self.df)
         self.decile_intervals_chemical = self.calculate_decile_intervals_all_columns(self.chemical_subset)
+        self.decile_intervals_chemical_err = self.calculate_decile_intervals_all_columns(self.chemical_subset_err)
+
 
     def prepare_for_insertion(self):
         """
@@ -250,6 +251,8 @@ class DataPipeline:
                     self.telescope_name_to_obj = {telescope.name: telescope for telescope in telescopes_in_db}
             except Exception as e:
                 print(f"An error occurred during telescope insertion: {e}")
+
+
     def create_orm_objects(self, batch_size=1000):
         """
         Create ORM objects from the processed DataFrame and insert them into the database in batches.
@@ -366,6 +369,20 @@ class DataPipeline:
                     range_id = f"{table_name.upper()}_{idx}"
                     range_instance = model_class(id=range_id)
                     setattr(range_instance, range_attr, f"{lower} to {upper}")
+                    self.range_objects.append(range_instance)
+
+            # Create ranges for chemical element errors
+        for column in self.chemical_subset_err.columns:
+            element_name = column.split('_')[0]  # Get the element name from the column name
+            intervals = self.decile_intervals_chemical_err.get(f"{column}_RANGE")
+            if intervals is not None:
+                for idx, (lower, upper) in enumerate(intervals):
+                    range_id = f"{element_name}_ERR_{idx}"
+                    range_instance = DatabaseTables.ChemicalErrorRange(
+                        id=range_id,
+                        element_name=element_name,
+                        error_range=f"{lower} to {upper}"
+                    )
                     self.range_objects.append(range_instance)
 
         self.insert_range_objects()
