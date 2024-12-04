@@ -43,10 +43,12 @@ class DataPipeline:
 
 
         self.flag_columns = None
+        self.all_fields = None
 
 
         self.star_objects = []
         self.range_objects = []
+        self.fields_objects = []
 
     @staticmethod
     def replace_na(value):
@@ -106,6 +108,16 @@ class DataPipeline:
                 'name': list(all_telescopes)
             }).dropna().reset_index(drop=True)
 
+        if 'FIELD' in df.columns:
+            # Split the 'FIELD' column into lists
+            df['FIELD_LIST'] = df['FIELD'].apply(lambda x: str(x).split(',') if pd.notnull(x) else [])
+            # Get all unique fields
+            all_fields = set()
+            df['FIELD_LIST'].apply(lambda x: all_fields.update(x))
+            self.fields = pd.DataFrame({
+                'field_name': list(all_fields)
+            }).dropna().reset_index(drop=True)
+
         chemical_subset = df.filter(regex='_FE', axis=1)
         chemical_subset = pd.concat([chemical_subset, df.filter(regex='_H', axis=1)], axis=1)
         chemical_subset = chemical_subset.drop(to_remove_from_chemicals, axis=1) # drop a specific list of columns
@@ -131,7 +143,6 @@ class DataPipeline:
             df[flag_col + '_LIST'].apply(lambda x: self.all_flags.update([flag.strip() for flag in x if flag.strip()]))
 
         self.flag_list_columns = [flag_col + '_LIST' for flag_col in flag_columns]
-
 
         self.df = df
         self.chemical_subset = chemical_subset
@@ -173,7 +184,6 @@ class DataPipeline:
         # Store the list columns for later use
         self.chemical_flag_list_columns = [col + '_LIST' for col in self.chemical_flag_columns]
 
-        print(len(self.chemical_subset.columns))
 
 
     def calculate_decile_intervals_all_columns(self, df, decimals=3):
@@ -281,6 +291,27 @@ class DataPipeline:
             except Exception as e:
                 print(f"An error occurred during survey insertion: {e}")
 
+
+    def create_fields_objects(self):
+        """
+        Create ORM objects for fields and insert them into the database.
+        """
+        print("insert fields")
+
+        if self.fields is not None:
+            field_objects = []
+            for idx, row in self.fields.iterrows():
+                field = DatabaseTables.Field(field_name=row['field_name'])
+                field_objects.append(field)
+            try:
+                with self.connector.session_scope() as session:
+                    session.bulk_save_objects(field_objects)
+                    session.commit()
+                    # Build mapping from field name to ORM object
+                    fields_in_db = session.query(DatabaseTables.Field).all()
+                    self.field_name_to_obj = {field.field_name: field for field in fields_in_db}
+            except Exception as e:
+                print(f"An error occurred during field insertion: {e}")
     def create_telescope_objects(self):
         """
         Create ORM objects for telescopes and insert them into the database.
@@ -373,6 +404,25 @@ class DataPipeline:
                         starflag_obj = self.starflag_name_to_obj.get(flag_name)
                         if starflag_obj:
                             star.starflags.append(starflag_obj)
+
+                ra = self.replace_na(getattr(row, 'RA', None))
+                dec = self.replace_na(getattr(row, 'DEC', None))
+                field_list = getattr(row, 'FIELD_LIST', [])
+                field_name = field_list[0].strip() if field_list else None
+
+                if field_name:
+                    field_obj = self.field_name_to_obj.get(field_name)
+                else:
+                    field_obj = None
+
+                coordinates = DatabaseTables.Coordinates(
+                    ra=ra,
+                    dec=dec,
+                    field=field_obj
+                )
+
+                # Assignation des coordonnées à l'étoile
+                star.coordinates = coordinates
 
                 star_objects.append(star)
                 count += 1
@@ -615,7 +665,6 @@ class DataPipeline:
             with self.connector.session_scope() as session:
                 for obj in tqdm(self.range_objects, desc="Inserting range objects"):
                     session.merge(obj)
-                print("Range objects inserted successfully!")
         except Exception as e:
             print(f"An error occurred during database insertion: {e}")
 
@@ -632,7 +681,6 @@ class DataPipeline:
                     session.merge(survey)
                 for telescope in self.telescope_name_to_obj.values():
                     session.merge(telescope)
-                print("Survey and telescope objects inserted successfully!")
         except Exception as e:
             print(f"An error occurred during database insertion: {e}")
 
@@ -655,9 +703,8 @@ class DataPipeline:
             with self.connector.session_scope() as session:
                 session.bulk_save_objects(chemical_element_objects)
                 session.commit()
-                print("Chemical elements inserted successfully!")
         except Exception as e:
-            print(f"An error occurred during chemical element insertion: {e}")
+            print(f"An error occurred during chemical element insertion: {e}\n")
 
     def calculate_decile_intervals(self, series, decimals=3):
         """
@@ -720,57 +767,27 @@ class DataPipeline:
         the data into the database.
         """
         self.preprocess()
-        print("Preprocessing done")
+        print("Preprocessing done\n")
         self.filter_and_clean()
-        print("Filtering and cleaning done")
+        print("Filtering and cleaning done\n")
         self.generate_ranges()
-        print("Ranges generated")
+        print("Ranges generated\n")
         self.create_range_objects()
-        print("Range objects created")
+        print("Range objects created\n")
 
         self.create_starflag_objects()
-        print("Starflag objects created")
+        print("Starflag objects created\n")
         self.create_chemical_flag_objects()
-        print("Chemical flag objects created")
-
+        print("Chemical flag objects created \n")
+        self.create_fields_objects()
         self.prepare_for_insertion()
-        print("Preparation done")
         self.inser_telecope_survey()
         self.insert_chemical_elements()
-        print("Chemical elements inserted")
+        print("Chemical elements inserted\n")
         self.create_orm_objects()
-        print("ORM objects created")
+        print("ORM objects created\n")
 
         self.create_chemical_abundance_objects()
         #self.insert_into_database()
         print("Insertion done")
 
-
-# Example Usage
-if __name__ == "__main__":
-    start = time.time()
-    # Load dataset
-    df = pd.read_csv('../../data/allStarLite_10rows.csv')
-    print(f"Dataset loaded, time taken: {time.time() - start:.2f} seconds")
-
-    from src.database.operations import DatabaseConnector
-    from src.database.connection import DATABASE_URL
-
-    connector = DatabaseConnector(DATABASE_URL)
-
-    database_tables = DatabaseTables()
-
-    # Drop all tables
-    connector.drop_tables(DatabaseTables.Base)
-
-    # Create all tables
-    connector.create_tables(DatabaseTables.Base)
-
-    # Initialize pipeline
-    pipeline = DataPipeline(df, connector)
-
-    # Run pipeline
-    pipeline.run()
-
-    end = time.time()
-    print(f"Time taken: {end - start:.2f} seconds")
