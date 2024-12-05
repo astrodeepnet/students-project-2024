@@ -30,6 +30,9 @@ class DatabaseTables:
         apogee_id = Column(String, primary_key=True)
         name = Column(String)
 
+        coordinates_id = Column(Integer, ForeignKey('coordinates.id'))
+        coordinates = relationship('Coordinates', back_populates='star', uselist=False)
+
         surveys = relationship(
             'Survey',
             secondary='star_survey_associations',
@@ -135,7 +138,7 @@ class DatabaseTables:
         dec = Column(Float)
 
         field = relationship('Field', back_populates='coordinates')
-
+        star = relationship('Star', back_populates='coordinates', uselist=False)
 
     class J_error(Base):
         """J_error table, id is the j_error (string) and contain j_err_range"""
