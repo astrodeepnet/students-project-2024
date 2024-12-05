@@ -10,7 +10,7 @@ from database.connection import DATABASE_URL
 if __name__ == "__main__":
     start = time.time()
     # Load dataset
-    df = pd.read_csv('../data/allStarLite1000rows.csv')
+    df = pd.read_csv('../data/allStarLite100000rows.csv')
     print(f"Dataset loaded, time taken: {time.time() - start:.2f} seconds")
 
 
