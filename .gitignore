@@ -1,3 +1,7 @@
 /data/
 
 /src/database/connection.py
+
+/src/database/__pycache__/
+
+/src/pipeline/__pycache__/
