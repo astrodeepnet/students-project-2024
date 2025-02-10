@@ -5,3 +5,5 @@
 /src/database/__pycache__/
 
 /src/pipeline/__pycache__/
+
+.idea/
