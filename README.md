@@ -38,3 +38,18 @@ DATABASE_URL = f"postgresql+psycopg2://{username}:{password}@{host}:{port}/{data
 ```bash
 python src/main.py
 ```
+
+#### Generate dataset for data mining
+
+run the following ipython notebook:
+```bash
+jupyter notebook notebooks/s2/resample.ipynb
+```
+
+It should generated a .csv with all of the features and rows neede for the data mining steps.
+Data is :
+- normalised
+- without missing values
+- without outliers
+- with the target classes inputed
+- TODO : balances the classes or add weight to minority classes

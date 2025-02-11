@@ -1,3 +1,6 @@
 /data/
 
 /src/database/connection.py
+
+.idea/
+
